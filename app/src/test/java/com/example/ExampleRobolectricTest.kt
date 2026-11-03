@@ -347,6 +347,28 @@ class ExampleRobolectricTest {
         // End of day is after start of day
         assertTrue(day1.toEndOfDayMillis() > day1.toStartOfDayMillis())
     }
+
+    @Test
+    fun testAgeDeclensionAndDisplay() {
+        fun formatAgeWord(age: Int): String {
+            return when {
+                age % 100 in 11..14 -> "лет"
+                age % 10 == 1 -> "год"
+                age % 10 in 2..4 -> "года"
+                else -> "лет"
+            }
+        }
+
+        assertEquals("год", formatAgeWord(21))
+        assertEquals("года", formatAgeWord(22))
+        assertEquals("года", formatAgeWord(24))
+        assertEquals("лет", formatAgeWord(25))
+        assertEquals("лет", formatAgeWord(11))
+        assertEquals("лет", formatAgeWord(14))
+        assertEquals("лет", formatAgeWord(16))
+        assertEquals("лет", formatAgeWord(30))
+    }
 }
+
 
 

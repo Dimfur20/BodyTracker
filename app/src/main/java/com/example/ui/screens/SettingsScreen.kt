@@ -242,7 +242,71 @@ fun SettingsScreen(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Current age used in calculations indicator row
+                Surface(
+                    color = if (currentAge != null) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("current_calculation_age_row")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = androidx.compose.foundation.shape.CircleShape,
+                            color = if (currentAge != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = null,
+                                    tint = if (currentAge != null) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Нынешний возраст в расчётах:",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            val ageDisplay = if (currentAge != null) {
+                                val word = when {
+                                    currentAge % 100 in 11..14 -> "лет"
+                                    currentAge % 10 == 1 -> "год"
+                                    currentAge % 10 in 2..4 -> "года"
+                                    else -> "лет"
+                                }
+                                val badge = if (currentAge in 14..17) " (подросток, 14–17 лет)" else " (взрослый, нормы ВОЗ)"
+                                "$currentAge $word$badge"
+                            } else {
+                                "Не указан (по умолчанию шкала ВОЗ 18+)"
+                            }
+                            Text(
+                                text = ageDisplay,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (currentAge != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
 
                 // Age input field
                 val parsedAge = ageInput.toIntOrNull()
