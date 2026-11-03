@@ -1,0 +1,6 @@
+{
+  "name": "BodyMetrics",
+  "description": "Трекер веса, роста и параметров тела с графиками динамики и экспортом данных в файл.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

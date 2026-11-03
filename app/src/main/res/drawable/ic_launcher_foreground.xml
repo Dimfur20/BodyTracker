@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Circular glowing backdrop for icon center -->
+    <path
+        android:fillColor="#1510B981"
+        android:pathData="M54,54m-30,0a30,30 0,1 1,60 0a30,30 0,1 1,-60 0" />
+    
+    <!-- Weight scale base / platform -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M34,42C34,39.8 35.8,38 38,38L70,38C72.2,38 74,39.8 74,42L74,70C74,72.2 72.2,74 70,74L38,74C35.8,74 34,72.2 34,70Z" />
+
+    <!-- Scale Display window -->
+    <path
+        android:fillColor="#0F172A"
+        android:pathData="M44,44L64,44C65.1,44 66,44.9 66,46L66,54C66,55.1 65.1,56 64,56L44,56C42.9,56 42,55.1 42,54L42,46C42,44.9 42.9,44 44,44Z" />
+
+    <!-- Scale dial indicator / needle -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M53,53L55,53L56,47L52,47Z" />
+
+    <!-- Measuring tape wrapping around bottom right -->
+    <path
+        android:strokeColor="#F59E0B"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M32,66 C 36,75, 72,77, 76,64 C 79,53, 62,59, 56,65" />
+
+    <!-- Tick marks on measuring tape -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.2"
+        android:strokeLineCap="round"
+        android:pathData="M39,71L40,73M46,73.5L46.5,75.5M54,74L54,76M62,72L63,74M69,68.5L71,70" />
+</vector>
