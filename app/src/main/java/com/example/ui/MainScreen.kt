@@ -44,6 +44,7 @@ import com.example.data.BodyMetricEntry
 import com.example.ui.components.AddEditMetricDialog
 import com.example.ui.screens.ChartsScreen
 import com.example.ui.screens.JournalScreen
+import com.example.ui.screens.MiFitnessImportScreen
 import com.example.ui.screens.SettingsScreen
 
 enum class AppTab(val titleRu: String, val icon: ImageVector, val tag: String) {
@@ -77,6 +78,34 @@ fun MainScreen(
     val userMessage by viewModel.userMessage.collectAsStateWithLifecycle()
     val isAddEditOpen by viewModel.isAddEditOpen.collectAsStateWithLifecycle()
     val editingEntry by viewModel.editingEntry.collectAsStateWithLifecycle()
+
+    var showMiFitnessScreen by remember { mutableStateOf(false) }
+
+    val isMiFitnessParsing by viewModel.isMiFitnessParsing.collectAsStateWithLifecycle()
+    val miFitnessProgressLines by viewModel.miFitnessProgressLines.collectAsStateWithLifecycle()
+    val miFitnessParseResult by viewModel.miFitnessParseResult.collectAsStateWithLifecycle()
+    val miFitnessErrorMessage by viewModel.miFitnessErrorMessage.collectAsStateWithLifecycle()
+
+    if (showMiFitnessScreen) {
+        MiFitnessImportScreen(
+            isParsing = isMiFitnessParsing,
+            progressLines = miFitnessProgressLines,
+            parseResult = miFitnessParseResult,
+            errorMessage = miFitnessErrorMessage,
+            onSelectFile = { uri -> viewModel.parseMiFitnessArchive(uri) },
+            onConfirmImport = { result, updateHeight ->
+                viewModel.applyMiFitnessImport(result, updateHeight)
+                showMiFitnessScreen = false
+            },
+            onDismissResult = { viewModel.clearMiFitnessState() },
+            onDismissError = { viewModel.clearMiFitnessState() },
+            onNavigateBack = {
+                viewModel.clearMiFitnessState()
+                showMiFitnessScreen = false
+            }
+        )
+        return
+    }
 
     // Handle back button: if on non-journal tab, return to Journal tab
     BackHandler(enabled = selectedTab != AppTab.JOURNAL) {
@@ -215,6 +244,10 @@ fun MainScreen(
                             onGetTextSummary = { viewModel.exportToTextSummary() },
                             onPrepareCloudBackupFile = { viewModel.createBackupFileForShare() },
                             onImportCsv = { csv -> viewModel.importCsv(csv) },
+                            onGetJsonBackup = { viewModel.exportJsonBackup() },
+                            onPrepareJsonImport = { json -> viewModel.prepareJsonBackupSummary(json) },
+                            onApplyJsonImport = { summary -> viewModel.applyJsonImport(summary) },
+                            onNavigateToMiFitness = { showMiFitnessScreen = true },
                             onGenerateDemo = { viewModel.generateDemoData() },
                             onClearAll = { viewModel.clearAllData() },
                             onShowMessage = { msg -> viewModel.showMessage(msg) }

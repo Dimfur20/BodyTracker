@@ -368,6 +368,161 @@ class ExampleRobolectricTest {
         assertEquals("лет", formatAgeWord(16))
         assertEquals("лет", formatAgeWord(30))
     }
+
+    @Test
+    fun testJsonBackupExportAndValidation() {
+        val entry1 = BodyMetricEntry(
+            id = 10L,
+            dateMillis = 1700000000000L, // 1700000000 sec
+            weightKg = 76.5f,
+            heightCm = 178f,
+            waistCm = 82f,
+            notes = "Заметка о весе"
+        )
+        val entry2 = BodyMetricEntry(
+            id = 11L,
+            dateMillis = 1700086400000L,
+            weightKg = 76.0f,
+            heightCm = 178f
+            // no waist or other measurements
+        )
+
+        // 1. Export JSON
+        val exportedJson = com.example.data.backup.JsonBackupManager.exportToJson(
+            entries = listOf(entry1, entry2),
+            userAge = 28,
+            targetWeightKg = 72.0f,
+            weeklyReminderEnabled = true
+        )
+
+        assertTrue(exportedJson.contains("\"schema_version\": 1"))
+        assertTrue(exportedJson.contains("\"created_at\":"))
+        assertTrue(exportedJson.contains("\"age\": 28"))
+        assertTrue(exportedJson.contains("\"target_weight_kg\": 72"))
+        assertTrue(exportedJson.contains("\"weekly_reminder_enabled\": true"))
+        assertTrue(exportedJson.contains("\"type\": \"weight\""))
+        assertTrue(exportedJson.contains("\"type\": \"waist\""))
+        assertTrue(exportedJson.contains("\"value\": 76.5"))
+        assertTrue(exportedJson.contains("\"unit\": \"kg\""))
+        assertTrue(exportedJson.contains("\"timestamp\": 1700000000"))
+        assertTrue(exportedJson.contains("\"source\": \"manual\""))
+        assertTrue(exportedJson.contains("\"updated_at\": 1700000000"))
+
+        // Entry2 had no chest, hips, neck etc - ensure empty measurement sections are not exported
+        assertFalse(exportedJson.contains("\"type\": \"chest\""))
+        assertFalse(exportedJson.contains("\"type\": \"hips\""))
+
+        // 2. Parse and Validate JSON
+        val parseResult = com.example.data.backup.JsonBackupManager.parseAndValidateJson(
+            jsonString = exportedJson,
+            existingEntries = emptyList()
+        )
+        assertTrue(parseResult.isSuccess)
+        val summary = parseResult.getOrThrow()
+        assertEquals(1, summary.schemaVersion)
+        assertEquals(2, summary.entriesToAdd.size)
+        assertEquals(0, summary.duplicatesCount)
+        assertEquals(28, summary.settingsToRestore?.age)
+        assertEquals(72.0f, summary.settingsToRestore?.targetWeightKg ?: 0f, 0.01f)
+        assertEquals(true, summary.settingsToRestore?.weeklyReminderEnabled)
+
+        // 3. Deduplication: when importing again against existing entries, should detect duplicates
+        val deduplicatedResult = com.example.data.backup.JsonBackupManager.parseAndValidateJson(
+            jsonString = exportedJson,
+            existingEntries = listOf(entry1, entry2)
+        )
+        assertTrue(deduplicatedResult.isSuccess)
+        val dedupSummary = deduplicatedResult.getOrThrow()
+        assertEquals(2, dedupSummary.duplicatesCount)
+        assertEquals(0, dedupSummary.entriesToAdd.size)
+
+        // 4. Schema version checks
+        val invalidSchemaJson = "{\"created_at\": \"2026-11-05T00:00:00Z\", \"records\": []}"
+        val failedMissingSchema = com.example.data.backup.JsonBackupManager.parseAndValidateJson(
+            invalidSchemaJson,
+            emptyList()
+        )
+        assertTrue(failedMissingSchema.isFailure)
+
+        val futureSchemaJson = "{\"schema_version\": 99, \"created_at\": \"2026-11-05T00:00:00Z\", \"records\": []}"
+        val failedFutureSchema = com.example.data.backup.JsonBackupManager.parseAndValidateJson(
+            futureSchemaJson,
+            emptyList()
+        )
+        assertTrue(failedFutureSchema.isFailure)
+    }
+
+    @Test
+    fun testMiFitnessArchiveParsing() {
+        val baos = java.io.ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(baos).use { zos ->
+            // Entry 1: user_member_profile.csv
+            val profileEntry = java.util.zip.ZipEntry("20261104_123456_MiFitness_user_member_profile.csv")
+            zos.putNextEntry(profileEntry)
+            val profileCsv = "Uid,Name,Sex,Birth,Height,Weight,Relation,XiaomiId,Region,SpecialMark,Icon\n" +
+                    "1001,\"Test User\",1,\"1995-05-10\",182.5,79.0,0,12345,\"RU\",0,\"icon.png\"\n"
+            zos.write(profileCsv.toByteArray(Charsets.UTF_8))
+            zos.closeEntry()
+
+            // Entry 2: hlth_center_fitness_data.csv
+            val fitnessEntry = java.util.zip.ZipEntry("20261104_123456_MiFitness_hlth_center_fitness_data.csv")
+            zos.putNextEntry(fitnessEntry)
+            val fitnessCsv = "Uid,Sid,Key,Time,Value,UpdateTime\n" +
+                    "1001,1,heart_rate,1793683000,\"{\"\"bpm\"\":72}\",1793683000\n" +
+                    "1001,1,weight,1793683435,\"{\"\"bmi\"\":24.2,\"\"time\"\":1793683435,\"\"weight\"\":78.65}\",1793683435\n" +
+                    "1001,1,steps,1793683500,\"{\"\"step\"\":5000}\",1793683500\n" +
+                    "1001,1,weight,1793683900,\"{\"\"bmi\"\":24.1,\"\"time\"\":1793683900,\"\"weight\"\":78.20}\",1793683900\n" +
+                    "1001,1,weight,1793684000,\"{\"\"bmi\"\":0,\"\"time\"\":1793684000,\"\"weight\"\":0}\",1793684000\n" // weight <= 0 must be skipped
+            zos.write(fitnessCsv.toByteArray(Charsets.UTF_8))
+            zos.closeEntry()
+        }
+
+        // Existing entry for deduplication (same as the second record)
+        val existing = listOf(
+            BodyMetricEntry(
+                id = 5L,
+                dateMillis = 1793683900L * 1000L,
+                weightKg = 78.20f,
+                heightCm = 180f
+            )
+        )
+
+        var progressReported = 0
+        val inputStream = java.io.ByteArrayInputStream(baos.toByteArray())
+        val result = com.example.data.backup.MiFitnessArchiveParser.parseStream(
+            rawInputStream = inputStream,
+            existingEntries = existing,
+            userCurrentHeight = 175f,
+            onProgress = { progressReported = it }
+        )
+
+        assertTrue(result.isSuccess)
+        val parseSummary = result.getOrThrow()
+
+        // Total weight records found (excluding weight <= 0): 2
+        assertEquals(2, parseSummary.totalWeightRecordsFound)
+        // Duplicates count (1 is already in existing): 1
+        assertEquals(1, parseSummary.duplicatesCount)
+        // New records to add: 1 (weight 78.65)
+        assertEquals(1, parseSummary.newRecords.size)
+        assertEquals(78.65f, parseSummary.newRecords[0].weightKg, 0.01f)
+        assertEquals(1793683435L * 1000L, parseSummary.newRecords[0].dateMillis)
+        // Height extracted from profile (182.5 cm) applied to new records
+        assertEquals(182.5f, parseSummary.profileHeightCm ?: 0f, 0.01f)
+        assertEquals(182.5f, parseSummary.newRecords[0].heightCm, 0.01f)
+    }
+
+    @Test
+    fun testMiFitnessArchiveNonZipRejected() {
+        val nonZipStream = java.io.ByteArrayInputStream("This is definitely not a zip file.".toByteArray(Charsets.UTF_8))
+        val result = com.example.data.backup.MiFitnessArchiveParser.parseStream(
+            rawInputStream = nonZipStream,
+            existingEntries = emptyList()
+        )
+
+        assertTrue("Non-zip file must fail with clear error", result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message?.contains("ZIP") == true)
+    }
 }
 
 

@@ -19,6 +19,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import com.example.data.backup.JsonBackupManager
+import com.example.data.backup.JsonImportSummary
+import com.example.data.backup.MiFitnessArchiveParser
+import com.example.data.backup.MiFitnessParseResult
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -87,6 +91,18 @@ class BodyMetricsViewModel(application: Application) : AndroidViewModel(applicat
 
     private val _isAddEditOpen = MutableStateFlow(false)
     val isAddEditOpen: StateFlow<Boolean> = _isAddEditOpen.asStateFlow()
+
+    private val _isMiFitnessParsing = MutableStateFlow(false)
+    val isMiFitnessParsing: StateFlow<Boolean> = _isMiFitnessParsing.asStateFlow()
+
+    private val _miFitnessProgressLines = MutableStateFlow(0)
+    val miFitnessProgressLines: StateFlow<Int> = _miFitnessProgressLines.asStateFlow()
+
+    private val _miFitnessParseResult = MutableStateFlow<MiFitnessParseResult?>(null)
+    val miFitnessParseResult: StateFlow<MiFitnessParseResult?> = _miFitnessParseResult.asStateFlow()
+
+    private val _miFitnessErrorMessage = MutableStateFlow<String?>(null)
+    val miFitnessErrorMessage: StateFlow<String?> = _miFitnessErrorMessage.asStateFlow()
 
     // Distinct list of months available in the recorded dataset
     val availableMonths: StateFlow<List<MonthOption>> = allEntriesAscending.map { entries ->
@@ -302,6 +318,87 @@ class BodyMetricsViewModel(application: Application) : AndroidViewModel(applicat
             } catch (e: Exception) {
                 _userMessage.value = "Ошибка при импорте: ${e.localizedMessage ?: "неверный формат"}"
             }
+        }
+    }
+
+    // --- JSON Backup & Restore ---
+
+    fun exportJsonBackup(): String {
+        return JsonBackupManager.exportToJson(
+            entries = allEntriesDescending.value,
+            userAge = userAge.value,
+            targetWeightKg = targetWeightKg.value,
+            weeklyReminderEnabled = weeklyReminderEnabled.value
+        )
+    }
+
+    fun prepareJsonBackupSummary(jsonString: String): Result<JsonImportSummary> {
+        return JsonBackupManager.parseAndValidateJson(jsonString, allEntriesDescending.value)
+    }
+
+    fun applyJsonImport(summary: JsonImportSummary) {
+        viewModelScope.launch {
+            if (summary.entriesToAdd.isNotEmpty()) {
+                repository.insertAll(summary.entriesToAdd)
+            }
+            summary.settingsToRestore?.let { settings ->
+                settings.age?.let { settingsRepository.setAge(it) }
+                settings.targetWeightKg?.let { settingsRepository.setTargetWeight(it) }
+                settings.weeklyReminderEnabled?.let { setWeeklyReminder(it) }
+            }
+            _userMessage.value = "Импорт завершён: добавлено ${summary.entriesToAdd.size}, дубликатов: ${summary.duplicatesCount}"
+        }
+    }
+
+    // --- Mi Fitness (Xiaomi) Import ---
+
+    fun parseMiFitnessArchive(uri: Uri) {
+        viewModelScope.launch {
+            _isMiFitnessParsing.value = true
+            _miFitnessProgressLines.value = 0
+            _miFitnessErrorMessage.value = null
+            _miFitnessParseResult.value = null
+
+            val currentHeight = allEntriesDescending.value.firstOrNull()?.heightCm ?: 175f
+            val result = MiFitnessArchiveParser.parseArchive(
+                context = getApplication(),
+                zipUri = uri,
+                existingEntries = allEntriesDescending.value,
+                userCurrentHeight = currentHeight,
+                onProgress = { lines ->
+                    _miFitnessProgressLines.value = lines
+                }
+            )
+
+            _isMiFitnessParsing.value = false
+            result.onSuccess { parsed ->
+                _miFitnessParseResult.value = parsed
+            }.onFailure { err ->
+                _miFitnessErrorMessage.value = err.localizedMessage ?: "Не удалось обработать архив"
+            }
+        }
+    }
+
+    fun clearMiFitnessState() {
+        _miFitnessParseResult.value = null
+        _miFitnessErrorMessage.value = null
+        _isMiFitnessParsing.value = false
+        _miFitnessProgressLines.value = 0
+    }
+
+    fun applyMiFitnessImport(result: MiFitnessParseResult, updateHeight: Boolean) {
+        viewModelScope.launch {
+            if (result.newRecords.isNotEmpty()) {
+                repository.insertAll(result.newRecords)
+            }
+            if (updateHeight && result.profileHeightCm != null) {
+                val latest = repository.getLatestEntry()
+                if (latest != null) {
+                    repository.update(latest.copy(heightCm = result.profileHeightCm))
+                }
+            }
+            _userMessage.value = "Импорт из Mi Fitness завершён: +${result.newRecords.size} записей, дубликатов: ${result.duplicatesCount}"
+            clearMiFitnessState()
         }
     }
 }

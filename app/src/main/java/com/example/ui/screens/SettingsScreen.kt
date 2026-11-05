@@ -25,10 +25,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddAlert
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
@@ -41,6 +44,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
+import com.example.data.backup.JsonImportSummary
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -97,6 +102,10 @@ fun SettingsScreen(
     onGetTextSummary: () -> String,
     onPrepareCloudBackupFile: () -> Pair<Uri, String>?,
     onImportCsv: (String) -> Unit,
+    onGetJsonBackup: () -> String,
+    onPrepareJsonImport: (String) -> Result<JsonImportSummary>,
+    onApplyJsonImport: (JsonImportSummary) -> Unit,
+    onNavigateToMiFitness: () -> Unit,
     onGenerateDemo: () -> Unit,
     onClearAll: () -> Unit,
     onShowMessage: (String) -> Unit,
@@ -188,6 +197,48 @@ fun SettingsScreen(
                 onImportCsv(sb.toString())
             } catch (e: Exception) {
                 onShowMessage("Ошибка при чтении файла: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    var pendingJsonSummary by remember { mutableStateOf<JsonImportSummary?>(null) }
+
+    // Launcher for saving JSON backup to storage
+    val createJsonLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val jsonContent = onGetJsonBackup()
+                context.contentResolver.openOutputStream(uri)?.use { stream ->
+                    stream.write(jsonContent.toByteArray(Charsets.UTF_8))
+                }
+                onShowMessage("Резервная копия JSON успешно сохранена!")
+            } catch (e: Exception) {
+                onShowMessage("Ошибка при сохранении JSON: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    // Launcher for restoring JSON backup from storage
+    val openJsonLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val content = context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                    BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8)).readText()
+                } ?: ""
+                if (content.isNotBlank()) {
+                    val result = onPrepareJsonImport(content)
+                    result.onSuccess { summary ->
+                        pendingJsonSummary = summary
+                    }.onFailure { err ->
+                        onShowMessage("Ошибка файла копии: ${err.localizedMessage ?: "неверный формат"}")
+                    }
+                }
+            } catch (e: Exception) {
+                onShowMessage("Ошибка при чтении JSON: ${e.localizedMessage}")
             }
         }
     }
@@ -854,6 +905,159 @@ fun SettingsScreen(
             }
         )
 
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // JSON Backup Card (Part 1: Compact JSON backup)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.FolderZip,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "Компактная копия (JSON)",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Один файл, только реальные данные пользователя",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Экспортирует вес, рост, замеры, цели и настройки в чистый JSON-файл без пустых разделов. При импорте дубликаты автоматически исключаются.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            val fileDate = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
+                            createJsonLauncher.launch("bodymetrics_backup_$fileDate.json")
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("settings_export_json_button"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Экспорт JSON", fontWeight = FontWeight.Bold)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            openJsonLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("settings_import_json_button"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Импорт JSON", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Mi Fitness Import Card (Part 2: Mi Fitness Xiaomi import)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primary,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.FitnessCenter,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "Импорт из Mi Fitness",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Xiaomi / Mi Fit / Zepp Life архив данных",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Пошаговая инструкция и быстрый потоковый импорт архива .zip без зависаний.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Button(
+                    onClick = onNavigateToMiFitness,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_mifitness_import_button"),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) {
+                    Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Импорт из Mi Fitness", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(20.dp))
 
         // Database Management Card
@@ -927,6 +1131,72 @@ fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showClearConfirmDialog = false }) {
+                    Text("Отмена")
+                }
+            }
+        )
+    }
+
+    pendingJsonSummary?.let { summary ->
+        AlertDialog(
+            onDismissRequest = { pendingJsonSummary = null },
+            title = {
+                Text(
+                    text = "Восстановление копии JSON",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Параметры резервной копии перед применением:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Формат: v${summary.schemaVersion}", style = MaterialTheme.typography.bodySmall)
+                    Text("Создана: ${summary.createdAt}", style = MaterialTheme.typography.bodySmall)
+                    Text("Всего записей: ${summary.totalRecordsFound}", style = MaterialTheme.typography.bodySmall)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Будет добавлено / обновлено: ${summary.entriesToAdd.size}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        "Пропущено дубликатов: ${summary.duplicatesCount}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (summary.settingsToRestore != null) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            "Также будут восстановлены ваши цели и настройки.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onApplyJsonImport(summary)
+                        pendingJsonSummary = null
+                    },
+                    modifier = Modifier.testTag("json_confirm_import_button")
+                ) {
+                    Text("Применить (${summary.entriesToAdd.size})")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { pendingJsonSummary = null },
+                    modifier = Modifier.testTag("json_cancel_import_button")
+                ) {
                     Text("Отмена")
                 }
             }
