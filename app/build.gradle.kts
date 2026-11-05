@@ -14,7 +14,7 @@ android {
     minSdk = 24
     targetSdk = 36
     versionCode = 1
-    versionName = "1.0"
+    versionName = "1.0.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -64,6 +64,14 @@ android {
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
+  }
+
+  applicationVariants.all {
+    outputs.all {
+      val output = this as? com.android.build.gradle.internal.api.BaseVariantOutputImpl
+      val vName = versionName ?: "1.0.0"
+      output?.outputFileName = "BodyMetrics-v${vName}.apk"
+    }
   }
 }
 

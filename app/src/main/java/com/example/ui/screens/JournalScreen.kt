@@ -123,6 +123,8 @@ fun JournalScreen(
                     pagerState.scrollToPage(lastIdx)
                     dateChipsListState.scrollToItem(lastIdx)
                     hasInitializedToLast = true
+                } else if (entries.isNotEmpty() && pagerState.currentPage >= entries.size) {
+                    pagerState.scrollToPage(entries.size - 1)
                 }
             }
 

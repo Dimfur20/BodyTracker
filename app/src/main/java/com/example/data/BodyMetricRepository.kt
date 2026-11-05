@@ -301,7 +301,7 @@ class BodyMetricRepository(private val dao: BodyMetricDao) {
         val sb = StringBuilder()
         var insideQuotes = false
         var i = 0
-        val delimiter = if (cleanLine.contains(";") && !cleanLine.contains(",")) ';' else defaultDelimiter
+        val delimiter = defaultDelimiter
 
         while (i < cleanLine.length) {
             val c = cleanLine[i]
