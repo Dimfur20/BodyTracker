@@ -329,20 +329,18 @@ class BodyMetricsViewModel(application: Application) : AndroidViewModel(applicat
 
     /**
      * Prepares a file in cacheDir/exports and returns a FileProvider Uri for Google Drive or cloud apps.
-     * Cleans up previously created export files immediately.
+     * Cleans up previously created export CSV files in this directory.
      */
     fun createBackupFileForShare(): Pair<Uri, String>? {
         val context = getApplication<Application>()
         return try {
-            val exportsDir = File(context.cacheDir, "exports").apply {
-                if (!exists()) mkdirs()
-            }
-            // Delete previous temporary exports
-            exportsDir.listFiles()?.forEach { it.delete() }
+            val exportDir = File(context.cacheDir, "exports").apply { mkdirs() }
+            // Перед записью нового бэкапа очисти старые временные CSV в этой папке:
+            exportDir.listFiles()?.filter { it.extension == "csv" }?.forEach { it.delete() }
 
             val fileDate = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
             val fileName = "bodymetrics_backup_$fileDate.csv"
-            val cacheFile = File(exportsDir, fileName)
+            val cacheFile = File(exportDir, fileName)
             val csvContent = exportToCsv()
             val contentWithBom = if (!csvContent.startsWith("\uFEFF")) "\uFEFF$csvContent" else csvContent
             cacheFile.writeText(contentWithBom, Charsets.UTF_8)
