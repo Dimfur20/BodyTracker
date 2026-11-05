@@ -63,14 +63,14 @@ object MetricValidationUtil {
      * Weight is valid if it is present and within [MIN_WEIGHT_KG]..[MAX_WEIGHT_KG].
      */
     fun isWeightValid(weight: Float?): Boolean {
-        return weight != null && weight in MIN_WEIGHT_KG..MAX_WEIGHT_KG
+        return weight != null && !weight.isNaN() && !weight.isInfinite() && weight in MIN_WEIGHT_KG..MAX_WEIGHT_KG
     }
 
     /**
      * Height is valid if it is present and within [MIN_HEIGHT_CM]..[MAX_HEIGHT_CM].
      */
     fun isHeightValid(height: Float?): Boolean {
-        return height != null && height in MIN_HEIGHT_CM..MAX_HEIGHT_CM
+        return height != null && !height.isNaN() && !height.isInfinite() && height in MIN_HEIGHT_CM..MAX_HEIGHT_CM
     }
 
     /**
@@ -79,7 +79,7 @@ object MetricValidationUtil {
      */
     fun isMeasurementValid(value: Float?): Boolean {
         if (value == null) return true
-        return value in MIN_MEASUREMENT_CM..MAX_MEASUREMENT_CM
+        return !value.isNaN() && !value.isInfinite() && value in MIN_MEASUREMENT_CM..MAX_MEASUREMENT_CM
     }
 
     /**

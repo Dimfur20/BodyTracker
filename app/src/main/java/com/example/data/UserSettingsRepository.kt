@@ -19,6 +19,12 @@ class UserSettingsRepository(context: Context) {
     private val _weeklyReminderEnabled = MutableStateFlow(getSavedReminder())
     val weeklyReminderEnabled: StateFlow<Boolean> = _weeklyReminderEnabled.asStateFlow()
 
+    private val _isSecureScreenEnabled = MutableStateFlow(getSavedSecureScreen())
+    val isSecureScreenEnabled: StateFlow<Boolean> = _isSecureScreenEnabled.asStateFlow()
+
+    private val _isBiometricLockEnabled = MutableStateFlow(getSavedBiometricLock())
+    val isBiometricLockEnabled: StateFlow<Boolean> = _isBiometricLockEnabled.asStateFlow()
+
     private fun getSavedAge(): Int? {
         val age = prefs.getInt(KEY_USER_AGE, -1)
         return if (age in 14..120) age else null
@@ -31,6 +37,14 @@ class UserSettingsRepository(context: Context) {
 
     private fun getSavedReminder(): Boolean {
         return prefs.getBoolean(KEY_WEEKLY_REMINDER, false)
+    }
+
+    private fun getSavedSecureScreen(): Boolean {
+        return prefs.getBoolean(KEY_SECURE_SCREEN, false)
+    }
+
+    private fun getSavedBiometricLock(): Boolean {
+        return prefs.getBoolean(KEY_BIOMETRIC_LOCK, false)
     }
 
     fun setAge(age: Int?) {
@@ -58,9 +72,21 @@ class UserSettingsRepository(context: Context) {
         _weeklyReminderEnabled.value = enabled
     }
 
+    fun setSecureScreenEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_SECURE_SCREEN, enabled).apply()
+        _isSecureScreenEnabled.value = enabled
+    }
+
+    fun setBiometricLockEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_BIOMETRIC_LOCK, enabled).apply()
+        _isBiometricLockEnabled.value = enabled
+    }
+
     companion object {
         private const val KEY_USER_AGE = "key_user_age"
         private const val KEY_TARGET_WEIGHT = "key_target_weight"
         private const val KEY_WEEKLY_REMINDER = "key_weekly_reminder"
+        private const val KEY_SECURE_SCREEN = "key_secure_screen"
+        private const val KEY_BIOMETRIC_LOCK = "key_biometric_lock"
     }
 }

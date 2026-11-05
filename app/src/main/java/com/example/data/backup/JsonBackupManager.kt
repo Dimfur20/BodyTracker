@@ -31,6 +31,7 @@ data class JsonImportSummary(
     val totalRecordsFound: Int,
     val entriesToAdd: List<BodyMetricEntry>,
     val duplicatesCount: Int,
+    val skippedInvalidCount: Int,
     val settingsToRestore: JsonBackupSettings?
 )
 
@@ -221,6 +222,7 @@ object JsonBackupManager {
 
             val entriesToAdd = mutableListOf<BodyMetricEntry>()
             var duplicatesCount = 0
+            var skippedInvalidCount = 0
 
             for ((timestampSec, records) in backupRecordsByTimestamp) {
                 val existing = existingByTimestamp[timestampSec]
@@ -234,12 +236,35 @@ object JsonBackupManager {
                 val neckRec = records.find { it.type == "neck" }
 
                 val weightVal = weightRec?.value ?: existing?.weightKg
-                if (weightVal == null || weightVal <= 0f) {
-                    // Cannot form a body metric without weight
+                if (!com.example.util.MetricValidationUtil.isWeightValid(weightVal)) {
+                    skippedInvalidCount++
                     continue
                 }
 
                 val heightVal = heightRec?.value ?: existing?.heightCm ?: 175f
+                if (!com.example.util.MetricValidationUtil.isHeightValid(heightVal)) {
+                    skippedInvalidCount++
+                    continue
+                }
+
+                val waistVal = waistRec?.value ?: existing?.waistCm
+                val chestVal = chestRec?.value ?: existing?.chestCm
+                val hipsVal = hipsRec?.value ?: existing?.hipsCm
+                val bicepsVal = bicepsRec?.value ?: existing?.bicepsCm
+                val thighVal = thighRec?.value ?: existing?.thighCm
+                val neckVal = neckRec?.value ?: existing?.neckCm
+
+                if (!com.example.util.MetricValidationUtil.isMeasurementValid(waistVal) ||
+                    !com.example.util.MetricValidationUtil.isMeasurementValid(chestVal) ||
+                    !com.example.util.MetricValidationUtil.isMeasurementValid(hipsVal) ||
+                    !com.example.util.MetricValidationUtil.isMeasurementValid(bicepsVal) ||
+                    !com.example.util.MetricValidationUtil.isMeasurementValid(thighVal) ||
+                    !com.example.util.MetricValidationUtil.isMeasurementValid(neckVal)
+                ) {
+                    skippedInvalidCount++
+                    continue
+                }
+
                 val noteVal = weightRec?.note ?: existing?.notes ?: ""
 
                 if (existing != null) {
@@ -257,14 +282,14 @@ object JsonBackupManager {
                     BodyMetricEntry(
                         id = existing?.id ?: 0L,
                         dateMillis = timestampSec * 1000L,
-                        weightKg = weightVal,
+                        weightKg = weightVal!!,
                         heightCm = heightVal,
-                        chestCm = chestRec?.value ?: existing?.chestCm,
-                        waistCm = waistRec?.value ?: existing?.waistCm,
-                        hipsCm = hipsRec?.value ?: existing?.hipsCm,
-                        bicepsCm = bicepsRec?.value ?: existing?.bicepsCm,
-                        thighCm = thighRec?.value ?: existing?.thighCm,
-                        neckCm = neckRec?.value ?: existing?.neckCm,
+                        chestCm = chestVal,
+                        waistCm = waistVal,
+                        hipsCm = hipsVal,
+                        bicepsCm = bicepsVal,
+                        thighCm = thighVal,
+                        neckCm = neckVal,
                         notes = noteVal
                     )
                 )
@@ -277,6 +302,7 @@ object JsonBackupManager {
                     totalRecordsFound = parsedRecords.size,
                     entriesToAdd = entriesToAdd,
                     duplicatesCount = duplicatesCount,
+                    skippedInvalidCount = skippedInvalidCount,
                     settingsToRestore = backupSettings
                 )
             )

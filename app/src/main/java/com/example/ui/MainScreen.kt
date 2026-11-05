@@ -5,10 +5,13 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FitnessCenter
@@ -57,6 +60,7 @@ enum class AppTab(val titleRu: String, val icon: ImageVector, val tag: String) {
 @Composable
 fun MainScreen(
     viewModel: BodyMetricsViewModel,
+    onPromptUnlock: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var selectedTab by remember { mutableStateOf(AppTab.JOURNAL) }
@@ -74,6 +78,10 @@ fun MainScreen(
     val userAge by viewModel.userAge.collectAsStateWithLifecycle()
     val targetWeightKg by viewModel.targetWeightKg.collectAsStateWithLifecycle()
     val weeklyReminderEnabled by viewModel.weeklyReminderEnabled.collectAsStateWithLifecycle()
+    val isSecureScreenEnabled by viewModel.isSecureScreenEnabled.collectAsStateWithLifecycle()
+    val isBiometricLockEnabled by viewModel.isBiometricLockEnabled.collectAsStateWithLifecycle()
+    val isAppLocked by viewModel.isAppLocked.collectAsStateWithLifecycle()
+    val pendingUndoEntry by viewModel.pendingUndoEntry.collectAsStateWithLifecycle()
 
     val userMessage by viewModel.userMessage.collectAsStateWithLifecycle()
     val isAddEditOpen by viewModel.isAddEditOpen.collectAsStateWithLifecycle()
@@ -85,6 +93,28 @@ fun MainScreen(
     val miFitnessProgressLines by viewModel.miFitnessProgressLines.collectAsStateWithLifecycle()
     val miFitnessParseResult by viewModel.miFitnessParseResult.collectAsStateWithLifecycle()
     val miFitnessErrorMessage by viewModel.miFitnessErrorMessage.collectAsStateWithLifecycle()
+
+    // Handle Undo deletion via Snackbar (stays ~6 seconds)
+    LaunchedEffect(pendingUndoEntry) {
+        val entry = pendingUndoEntry
+        if (entry != null) {
+            val result = snackbarHostState.showSnackbar(
+                message = "Замер удалён",
+                actionLabel = "Отменить",
+                duration = androidx.compose.material3.SnackbarDuration.Short
+            )
+            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                viewModel.restoreEntry(entry)
+            } else {
+                viewModel.clearPendingUndo()
+            }
+        }
+    }
+
+    if (isAppLocked) {
+        AppLockScreen(onUnlockClick = onPromptUnlock)
+        return
+    }
 
     if (showMiFitnessScreen) {
         MiFitnessImportScreen(
@@ -236,10 +266,14 @@ fun MainScreen(
                             targetWeightKg = targetWeightKg,
                             userHeightCm = latestHeight,
                             weeklyReminderEnabled = weeklyReminderEnabled,
+                            isSecureScreenEnabled = isSecureScreenEnabled,
+                            isBiometricLockEnabled = isBiometricLockEnabled,
                             entryCount = entriesDesc.size,
                             onSaveAge = { age -> viewModel.updateUserAge(age) },
                             onSaveTargetWeight = { target -> viewModel.updateTargetWeight(target) },
                             onToggleWeeklyReminder = { enabled -> viewModel.setWeeklyReminder(enabled) },
+                            onToggleSecureScreen = { enabled -> viewModel.setSecureScreenEnabled(enabled) },
+                            onToggleBiometricLock = { enabled -> viewModel.setBiometricLockEnabled(enabled) },
                             onGetCsvData = { viewModel.exportToCsv() },
                             onGetTextSummary = { viewModel.exportToTextSummary() },
                             onPrepareCloudBackupFile = { viewModel.createBackupFileForShare() },
@@ -266,5 +300,74 @@ fun MainScreen(
             onDismiss = { viewModel.closeAddEditDialog() },
             onSave = { entry -> viewModel.saveEntry(entry) }
         )
+    }
+}
+
+@Composable
+fun AppLockScreen(
+    onUnlockClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxSize().testTag("app_lock_screen"),
+        color = MaterialTheme.colorScheme.background
+    ) {
+        androidx.compose.foundation.layout.Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(32.dp),
+            horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+        ) {
+            Surface(
+                shape = androidx.compose.foundation.shape.CircleShape,
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                modifier = Modifier.size(96.dp)
+            ) {
+                Box(contentAlignment = androidx.compose.ui.Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.FitnessCenter,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(48.dp)
+                    )
+                }
+            }
+
+            androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(24.dp))
+
+            Text(
+                text = "BodyMetrics заблокирован",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+
+            androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Для доступа к вашим замерам подтвердите личность с помощью отпечатка или PIN-кода устройства.",
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(32.dp))
+
+            androidx.compose.material3.Button(
+                onClick = onUnlockClick,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth(0.7f)
+                    .height(50.dp)
+                    .testTag("app_unlock_button")
+            ) {
+                Text(
+                    text = "Разблокировать",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
     }
 }

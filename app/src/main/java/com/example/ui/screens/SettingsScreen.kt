@@ -94,10 +94,14 @@ fun SettingsScreen(
     targetWeightKg: Float?,
     userHeightCm: Float = 175f,
     weeklyReminderEnabled: Boolean = false,
+    isSecureScreenEnabled: Boolean = false,
+    isBiometricLockEnabled: Boolean = false,
     entryCount: Int,
     onSaveAge: (Int?) -> Unit,
     onSaveTargetWeight: (Float?) -> Unit,
     onToggleWeeklyReminder: (Boolean) -> Unit,
+    onToggleSecureScreen: (Boolean) -> Unit,
+    onToggleBiometricLock: (Boolean) -> Unit,
     onGetCsvData: () -> String,
     onGetTextSummary: () -> String,
     onPrepareCloudBackupFile: () -> Pair<Uri, String>?,
@@ -721,6 +725,97 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Card: Privacy and Security (FLAG_SECURE and Biometric / Device Credential Lock)
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("security_settings_card"),
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(modifier = Modifier.padding(18.dp)) {
+                Text(
+                    text = "Конфиденциальность и безопасность",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Switch 1: Hide content in app list & prevent screenshots (FLAG_SECURE)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Скрывать содержимое в списке приложений и запретить скриншоты",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Защищает личные замеры от снимков экрана и скрывает превью в недавних задачах",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Switch(
+                        checked = isSecureScreenEnabled,
+                        onCheckedChange = { onToggleSecureScreen(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = MaterialTheme.colorScheme.primary,
+                            checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                        ),
+                        modifier = Modifier.testTag("secure_screen_switch")
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Switch 2: Biometric or Device PIN Lock
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Блокировка отпечатком или PIN-кодом устройства",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Запрос биометрии или пароля при запуске и возврате после 1 минуты в фоне",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Switch(
+                        checked = isBiometricLockEnabled,
+                        onCheckedChange = { onToggleBiometricLock(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = MaterialTheme.colorScheme.primary,
+                            checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                        ),
+                        modifier = Modifier.testTag("biometric_lock_switch")
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Card 3: Age-adaptive BMI Guide
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -1171,6 +1266,13 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (summary.skippedInvalidCount > 0) {
+                        Text(
+                            "Пропущено некорректных записей: ${summary.skippedInvalidCount}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                     if (summary.settingsToRestore != null) {
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(

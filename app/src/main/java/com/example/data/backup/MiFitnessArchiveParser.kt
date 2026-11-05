@@ -15,6 +15,7 @@ data class MiFitnessParseResult(
     val totalWeightRecordsFound: Int,
     val newRecords: List<BodyMetricEntry>,
     val duplicatesCount: Int,
+    val skippedInvalidCount: Int,
     val minDateMillis: Long?,
     val maxDateMillis: Long?,
     val profileHeightCm: Float?
@@ -63,11 +64,9 @@ object MiFitnessArchiveParser {
         var foundFitnessDataFile = false
         var profileHeightCm: Float? = null
 
-        // Collect existing weight timestamps in seconds UTC for instant deduplication
-        val existingWeightSeconds = existingEntries.map { it.dateMillis / 1000L }.toSet()
-
         val parsedWeightPoints = mutableListOf<Pair<Long, Float>>() // Pair<TimestampSec, WeightKg>
         var duplicatesCount = 0
+        var skippedInvalidCount = 0
 
         return try {
             // Check if file starts with ZIP magic bytes (PK\x03\x04 or 0x50 0x4B)
@@ -84,86 +83,108 @@ object MiFitnessArchiveParser {
             }
 
             ZipInputStream(bufferedIn).use { zis ->
-                    var entry: ZipEntry?
-                    var linesRead = 0
+                var entry: ZipEntry?
+                var linesRead = 0
 
-                    while (zis.nextEntry.also { entry = it } != null) {
-                        val currentEntry = entry ?: break
-                        val entryName = currentEntry.name
+                while (zis.nextEntry.also { entry = it } != null) {
+                    val currentEntry = entry ?: break
+                    val entryName = currentEntry.name
 
-                        if (entryName.endsWith(USER_PROFILE_FILE_SUFFIX, ignoreCase = true)) {
-                            // Parse single-row profile for Height
-                            val reader = BufferedReader(InputStreamReader(zis, Charsets.UTF_8))
-                            val headerLine = reader.readLine()
-                            val dataLine = reader.readLine()
+                    if (entryName.endsWith(USER_PROFILE_FILE_SUFFIX, ignoreCase = true)) {
+                        // Parse single-row profile for Height
+                        val reader = BufferedReader(InputStreamReader(zis, Charsets.UTF_8))
+                        val headerLine = reader.readLine()
+                        val dataLine = reader.readLine()
 
-                            if (headerLine != null && dataLine != null) {
-                                val headers = parseSimpleCsvLine(headerLine)
-                                val values = parseSimpleCsvLine(dataLine)
-                                val heightColIdx = headers.indexOfFirst { it.equals("height", ignoreCase = true) }
-                                if (heightColIdx != -1 && heightColIdx < values.size) {
-                                    val h = values[heightColIdx].replace(",", ".").toFloatOrNull()
-                                    if (h != null && h > 30f && h < 300f) {
-                                        profileHeightCm = h
-                                    }
+                        if (headerLine != null && dataLine != null) {
+                            val headers = parseSimpleCsvLine(headerLine)
+                            val values = parseSimpleCsvLine(dataLine)
+                            val heightColIdx = headers.indexOfFirst { it.equals("height", ignoreCase = true) }
+                            if (heightColIdx != -1 && heightColIdx < values.size) {
+                                val h = values[heightColIdx].replace(",", ".").toFloatOrNull()
+                                if (h != null && com.example.util.MetricValidationUtil.isHeightValid(h)) {
+                                    profileHeightCm = h
                                 }
                             }
-                        } else if (entryName.endsWith(FITNESS_DATA_FILE_SUFFIX, ignoreCase = true)) {
-                            foundFitnessDataFile = true
-                            val reader = BufferedReader(InputStreamReader(zis, Charsets.UTF_8))
+                        }
+                    } else if (entryName.endsWith(FITNESS_DATA_FILE_SUFFIX, ignoreCase = true)) {
+                        foundFitnessDataFile = true
+                        val reader = BufferedReader(InputStreamReader(zis, Charsets.UTF_8))
 
-                            // Read line-by-line in a streaming fashion
-                            var line: String?
-                            // Skip header
-                            line = reader.readLine()
+                        // Read line-by-line in a streaming fashion
+                        var line: String?
+                        // Read header to locate Key and Time columns
+                        val headerLine = reader.readLine()
+                        val headers = if (headerLine != null) parseSimpleCsvLine(headerLine) else emptyList()
+                        val keyColIdx = headers.indexOfFirst { it.equals("Key", ignoreCase = true) }
+                        val timeColIdx = headers.indexOfFirst { it.equals("Time", ignoreCase = true) }
 
-                            while (reader.readLine().also { line = it } != null) {
-                                val currentLine = line ?: break
-                                linesRead++
+                        while (reader.readLine().also { line = it } != null) {
+                            val currentLine = line ?: break
+                            linesRead++
 
-                                if (linesRead % 20000 == 0) {
-                                    onProgress(linesRead)
+                            if (linesRead % 20000 == 0) {
+                                onProgress(linesRead)
+                            }
+
+                            // If Key column was identified, accept only if tokens[keyColIdx] == "weight"
+                            if (keyColIdx != -1) {
+                                val tokens = parseSimpleCsvLine(currentLine)
+                                if (keyColIdx >= tokens.size || tokens[keyColIdx] != "weight") {
+                                    continue
                                 }
-
-                                // Fast discard: if line does NOT contain "weight", skip immediately
+                            } else {
+                                // Fallback: check if line contains "weight"
                                 if (!currentLine.contains("weight", ignoreCase = true)) {
                                     continue
                                 }
+                            }
 
-                                // Extract JSON substring between '{' and '}'
-                                val jsonStart = currentLine.indexOf('{')
-                                val jsonEnd = currentLine.lastIndexOf('}')
-                                if (jsonStart == -1 || jsonEnd <= jsonStart) {
+                            // Extract JSON substring between '{' and '}'
+                            val jsonStart = currentLine.indexOf('{')
+                            val jsonEnd = currentLine.lastIndexOf('}')
+                            if (jsonStart == -1 || jsonEnd <= jsonStart) {
+                                skippedInvalidCount++
+                                continue
+                            }
+
+                            val rawJson = currentLine.substring(jsonStart, jsonEnd + 1).replace("\"\"", "\"")
+                            try {
+                                val obj = JSONObject(rawJson)
+                                val weight = obj.optDouble("weight", Double.NaN).toFloat()
+                                if (!com.example.util.MetricValidationUtil.isWeightValid(weight)) {
+                                    skippedInvalidCount++
                                     continue
                                 }
 
-                                val rawJson = currentLine.substring(jsonStart, jsonEnd + 1).replace("\"\"", "\"")
-                                try {
-                                    val obj = JSONObject(rawJson)
-                                    val weight = obj.optDouble("weight", 0.0).toFloat()
-                                    if (weight <= 0f) {
-                                        continue
-                                    }
-
-                                    var timeSec = obj.optLong("time", 0L)
-                                    if (timeSec <= 0L) {
-                                        // Fallback to column Time
+                                var timeSec = obj.optLong("time", 0L)
+                                if (timeSec <= 0L) {
+                                    // Fallback to column Time
+                                    if (timeColIdx != -1) {
+                                        val tokens = parseSimpleCsvLine(currentLine)
+                                        if (timeColIdx < tokens.size) {
+                                            timeSec = tokens[timeColIdx].trim().toLongOrNull() ?: 0L
+                                        }
+                                    } else {
                                         val tokens = parseSimpleCsvLine(currentLine)
                                         if (tokens.size >= 4) {
                                             timeSec = tokens[3].trim().toLongOrNull() ?: 0L
                                         }
                                     }
-
-                                    if (timeSec > 0L) {
-                                        parsedWeightPoints.add(Pair(timeSec, weight))
-                                    }
-                                } catch (_: Exception) {
-                                    // Skip malformed JSON
                                 }
+
+                                if (timeSec > 0L) {
+                                    parsedWeightPoints.add(Pair(timeSec, weight))
+                                } else {
+                                    skippedInvalidCount++
+                                }
+                            } catch (_: Exception) {
+                                skippedInvalidCount++
                             }
                         }
                     }
                 }
+            }
 
             if (!foundFitnessDataFile) {
                 return Result.failure(
@@ -180,12 +201,17 @@ object MiFitnessArchiveParser {
             }
 
             // Deduplicate within the file and against existing database entries
-            // Sort by timestamp
+            // Sort by timestamp ascending
             parsedWeightPoints.sortBy { it.first }
 
             val heightToUse = profileHeightCm ?: userCurrentHeight
             val newEntries = mutableListOf<BodyMetricEntry>()
-            val seenInArchive = mutableSetOf<Long>()
+
+            // Keep track of added items: Pair(timeSec, weight)
+            val addedPoints = mutableListOf<Pair<Long, Float>>()
+
+            // Prepare existing entries in seconds and weights
+            val existingPoints = existingEntries.map { Pair(it.dateMillis / 1000L, it.weightKg) }
 
             var minDate: Long? = null
             var maxDate: Long? = null
@@ -195,10 +221,21 @@ object MiFitnessArchiveParser {
                 if (minDate == null || millis < minDate) minDate = millis
                 if (maxDate == null || millis > maxDate) maxDate = millis
 
-                if (existingWeightSeconds.contains(timeSec) || seenInArchive.contains(timeSec)) {
+                // Deduplication check:
+                // 1. Exact second match against existing entries or previously accepted entries in this archive
+                // 2. OR within 10 minutes (600s) AND same weight (diff <= 0.1kg)
+                val isDuplicateInExisting = existingPoints.any { (exTime, exWeight) ->
+                    exTime == timeSec || (kotlin.math.abs(exTime - timeSec) <= 600L && kotlin.math.abs(exWeight - weight) <= 0.1001f)
+                }
+
+                val isDuplicateInAdded = addedPoints.any { (adTime, adWeight) ->
+                    adTime == timeSec || (kotlin.math.abs(adTime - timeSec) <= 600L && kotlin.math.abs(adWeight - weight) <= 0.1001f)
+                }
+
+                if (isDuplicateInExisting || isDuplicateInAdded) {
                     duplicatesCount++
                 } else {
-                    seenInArchive.add(timeSec)
+                    addedPoints.add(Pair(timeSec, weight))
                     newEntries.add(
                         BodyMetricEntry(
                             id = 0L,
@@ -216,6 +253,7 @@ object MiFitnessArchiveParser {
                     totalWeightRecordsFound = parsedWeightPoints.size,
                     newRecords = newEntries,
                     duplicatesCount = duplicatesCount,
+                    skippedInvalidCount = skippedInvalidCount,
                     minDateMillis = minDate,
                     maxDateMillis = maxDate,
                     profileHeightCm = profileHeightCm

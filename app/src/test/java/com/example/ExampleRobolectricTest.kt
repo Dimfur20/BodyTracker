@@ -82,16 +82,16 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun test30DayWindowExcludesOldEntries() {
+    fun testRolling7DayWindowAndFallback() {
         val now = 1700000000000L
         val oneDayMillis = 86_400_000L
 
         // Old entry 90 days ago: 100kg
-        // Entry 20 days ago: 80kg
-        // Entry today (now): 78kg (-2kg loss over 20 days = -0.7 kg/week)
+        // Entry 5 days ago: 80kg
+        // Entry today (now): 78kg (-2kg loss over 5 days: weeklyPace = (-2.0 / 5.0) * 7.0 = -2.8 kg/week)
         val entries = listOf(
             BodyMetricEntry(id = 1, dateMillis = now - 90 * oneDayMillis, weightKg = 100f, heightCm = 175f),
-            BodyMetricEntry(id = 2, dateMillis = now - 20 * oneDayMillis, weightKg = 80f, heightCm = 175f),
+            BodyMetricEntry(id = 2, dateMillis = now - 5 * oneDayMillis, weightKg = 80f, heightCm = 175f),
             BodyMetricEntry(id = 3, dateMillis = now, weightKg = 78f, heightCm = 175f)
         )
 
@@ -102,10 +102,9 @@ class ExampleRobolectricTest {
         )
 
         assertTrue(pred.isMovingTowardsGoal)
-        // deltaKg in 30 days is -2.0 kg over 20 days: weeklyPace = (-2.0 / 20.0) * 7.0 = -0.7 kg/week
         assertTrue(pred.weeklyPace != null)
-        assertEquals(-0.7, pred.weeklyPace!!, 0.05)
-        assertEquals("Снижение за 30 дн.", pred.paceDescription)
+        assertEquals(-2.8, pred.weeklyPace!!, 0.05)
+        assertEquals("Снижение за 7 дн.", pred.paceDescription)
     }
 
     @Test
@@ -128,17 +127,17 @@ class ExampleRobolectricTest {
         val now = 1700000000000L
         val oneDayMillis = 86_400_000L
 
-        // Accelerating case:
-        // Window 1 (previous 30-day window): from day -56 (84kg) to day -28 (82kg) -> -2kg / 4 wks = -0.5 kg/week
-        // Window 2 (current 30-day window): from day -28 (82kg) to day 0 (78kg) -> -4kg / 4 wks = -1.0 kg/week
+        // Accelerating case across 7-day rolling windows:
+        // Window 1 (previous 7-day window [-14d, -7d]): from day -14 (84kg) to day -7 (83kg) -> -1kg / week
+        // Window 2 (current 7-day window [-7d, 0d]): from day -7 (83kg) to day 0 (81kg) -> -2kg / week
         val acceleratingEntries = listOf(
-            BodyMetricEntry(id = 1, dateMillis = now - 56 * oneDayMillis, weightKg = 84f, heightCm = 175f),
-            BodyMetricEntry(id = 2, dateMillis = now - 28 * oneDayMillis, weightKg = 82f, heightCm = 175f),
-            BodyMetricEntry(id = 3, dateMillis = now, weightKg = 78f, heightCm = 175f)
+            BodyMetricEntry(id = 1, dateMillis = now - 14 * oneDayMillis, weightKg = 84f, heightCm = 175f),
+            BodyMetricEntry(id = 2, dateMillis = now - 7 * oneDayMillis, weightKg = 83f, heightCm = 175f),
+            BodyMetricEntry(id = 3, dateMillis = now, weightKg = 81f, heightCm = 175f)
         )
 
         val accelPred = com.example.util.GoalPredictionUtil.calculate(
-            currentWeight = 78f,
+            currentWeight = 81f,
             targetWeight = 70f,
             allEntries = acceleratingEntries
         )
@@ -147,17 +146,17 @@ class ExampleRobolectricTest {
         assertTrue(accelPred.prevWeeklyPace != null)
         assertTrue(accelPred.weeklyPace != null)
 
-        // Decelerating case:
-        // Window 1: from day -56 (86kg) to day -28 (82kg) -> -4kg / 4 wks = -1.0 kg/week
-        // Window 2: from day -28 (82kg) to day 0 (81kg) -> -1kg / 4 wks = -0.25 kg/week
+        // Decelerating case across 7-day rolling windows:
+        // Window 1 (previous 7-day window [-14d, -7d]): from day -14 (86kg) to day -7 (84kg) -> -2kg / week
+        // Window 2 (current 7-day window [-7d, 0d]): from day -7 (84kg) to day 0 (83.5kg) -> -0.5kg / week
         val deceleratingEntries = listOf(
-            BodyMetricEntry(id = 1, dateMillis = now - 56 * oneDayMillis, weightKg = 86f, heightCm = 175f),
-            BodyMetricEntry(id = 2, dateMillis = now - 28 * oneDayMillis, weightKg = 82f, heightCm = 175f),
-            BodyMetricEntry(id = 3, dateMillis = now, weightKg = 81f, heightCm = 175f)
+            BodyMetricEntry(id = 1, dateMillis = now - 14 * oneDayMillis, weightKg = 86f, heightCm = 175f),
+            BodyMetricEntry(id = 2, dateMillis = now - 7 * oneDayMillis, weightKg = 84f, heightCm = 175f),
+            BodyMetricEntry(id = 3, dateMillis = now, weightKg = 83.5f, heightCm = 175f)
         )
 
         val decelPred = com.example.util.GoalPredictionUtil.calculate(
-            currentWeight = 81f,
+            currentWeight = 83.5f,
             targetWeight = 70f,
             allEntries = deceleratingEntries
         )
@@ -522,6 +521,78 @@ class ExampleRobolectricTest {
 
         assertTrue("Non-zip file must fail with clear error", result.isFailure)
         assertTrue(result.exceptionOrNull()?.message?.contains("ZIP") == true)
+    }
+
+    @Test
+    fun testMiFitnessArchiveDeduplicationWithin10Minutes() {
+        val baos = java.io.ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(baos).use { zos ->
+            val fitnessEntry = java.util.zip.ZipEntry("20261104_123456_MiFitness_hlth_center_fitness_data.csv")
+            zos.putNextEntry(fitnessEntry)
+            // Three records:
+            // 1. time 1000, weight 75.0
+            // 2. time 1300 (5 mins later = within 10 min), weight 75.05 (diff <= 0.1 kg) -> duplicate
+            // 3. time 2000 (16 mins later), weight 75.0 -> valid new record
+            val fitnessCsv = "Uid,Sid,Key,Time,Value,UpdateTime\n" +
+                    "1001,1,weight,1000,\"{\"\"time\"\":1000,\"\"weight\"\":75.0}\",1000\n" +
+                    "1001,1,weight,1300,\"{\"\"time\"\":1300,\"\"weight\"\":75.05}\",1300\n" +
+                    "1001,1,weight,2000,\"{\"\"time\"\":2000,\"\"weight\"\":75.0}\",2000\n"
+            zos.write(fitnessCsv.toByteArray(Charsets.UTF_8))
+            zos.closeEntry()
+        }
+
+        val result = com.example.data.backup.MiFitnessArchiveParser.parseStream(
+            rawInputStream = java.io.ByteArrayInputStream(baos.toByteArray()),
+            existingEntries = emptyList()
+        )
+        assertTrue(result.isSuccess)
+        val summary = result.getOrThrow()
+        assertEquals(3, summary.totalWeightRecordsFound)
+        assertEquals(1, summary.duplicatesCount)
+        assertEquals(2, summary.newRecords.size)
+    }
+
+    @Test
+    fun testCsvDetailedValidationAndDeduplication() {
+        val dummyDao = object : com.example.data.BodyMetricDao {
+            override fun getAllEntriesDescending() = kotlinx.coroutines.flow.emptyFlow<List<BodyMetricEntry>>()
+            override fun getAllEntriesAscending() = kotlinx.coroutines.flow.emptyFlow<List<BodyMetricEntry>>()
+            override suspend fun getLatestEntry(): BodyMetricEntry? = null
+            override suspend fun getEntryById(id: Long): BodyMetricEntry? = null
+            override suspend fun insert(entry: BodyMetricEntry): Long = 0L
+            override suspend fun insertAll(entries: List<BodyMetricEntry>) {}
+            override suspend fun update(entry: BodyMetricEntry) {}
+            override suspend fun delete(entry: BodyMetricEntry) {}
+            override suspend fun deleteById(id: Long) {}
+            override suspend fun deleteAll() {}
+        }
+        val repository = com.example.data.BodyMetricRepository(dummyDao)
+
+        // CSV with:
+        // Line 1: valid (date 2024-05-01, 75.0kg, height omitted -> should use lastKnownHeight 180f)
+        // Line 2: invalid date (not parsed) -> skipped
+        // Line 3: invalid weight (10.0kg < 20.0kg) -> skipped
+        // Line 4: duplicate of Line 1 (same exact date & time) -> duplicate
+        // Line 5: valid (date 2024-05-02, 74.5kg, height 178f)
+        val csv = "ID,Дата,Время,Вес (кг),Рост (см),ИМТ,Грудь (см),Талия (см),Бёдра (см),Бицепс (см),Бедро (см),Шея (см),Заметки\n" +
+                "1,2024-05-01,08:30,75.0,,,100,82,,,,Заметка\n" +
+                "2,invalid-date,08:30,75.0,180.0,23.1,,,,,,,\n" +
+                "3,2024-05-01,09:00,10.0,180.0,3.1,,,,,,,\n" +
+                "4,2024-05-01,08:30,75.0,180.0,23.1,,,,,,,\n" +
+                "5,2024-05-02,08:30,74.5,178.0,23.5,,,,,,,\n"
+
+        val parseResult = repository.parseCsvDetailed(
+            csvText = csv,
+            lastKnownHeight = 180f,
+            existingEntries = emptyList()
+        )
+
+        assertEquals(2, parseResult.entries.size)
+        assertEquals(2, parseResult.skippedInvalidCount)
+        assertEquals(1, parseResult.duplicatesCount)
+        assertEquals(180f, parseResult.entries[0].heightCm, 0.01f) // used lastKnownHeight
+        assertEquals(75.0f, parseResult.entries[0].weightKg, 0.01f)
+        assertEquals(74.5f, parseResult.entries[1].weightKg, 0.01f)
     }
 }
 

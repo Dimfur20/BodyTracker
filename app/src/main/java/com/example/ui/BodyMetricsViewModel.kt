@@ -56,6 +56,15 @@ class BodyMetricsViewModel(application: Application) : AndroidViewModel(applicat
     val userAge: StateFlow<Int?> = settingsRepository.userAge
     val targetWeightKg: StateFlow<Float?> = settingsRepository.targetWeightKg
     val weeklyReminderEnabled: StateFlow<Boolean> = settingsRepository.weeklyReminderEnabled
+    val isSecureScreenEnabled: StateFlow<Boolean> = settingsRepository.isSecureScreenEnabled
+    val isBiometricLockEnabled: StateFlow<Boolean> = settingsRepository.isBiometricLockEnabled
+
+    private val _isAppLocked = MutableStateFlow(false)
+    val isAppLocked: StateFlow<Boolean> = _isAppLocked.asStateFlow()
+
+    // Undo deletion state: holds the last deleted entry and callback to show snackbar
+    private val _pendingUndoEntry = MutableStateFlow<BodyMetricEntry?>(null)
+    val pendingUndoEntry: StateFlow<BodyMetricEntry?> = _pendingUndoEntry.asStateFlow()
 
     val allEntriesDescending: StateFlow<List<BodyMetricEntry>> = repository.allEntriesDescending
         .stateIn(
@@ -221,6 +230,26 @@ class BodyMetricsViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    fun setSecureScreenEnabled(enabled: Boolean) {
+        settingsRepository.setSecureScreenEnabled(enabled)
+        _userMessage.value = if (enabled) "Скрытие в списке приложений и защита скриншотов включены" else "Защита скриншотов выключена"
+    }
+
+    fun setBiometricLockEnabled(enabled: Boolean) {
+        settingsRepository.setBiometricLockEnabled(enabled)
+        _userMessage.value = if (enabled) "Блокировка устройства включена" else "Блокировка устройства выключена"
+    }
+
+    fun lockApp() {
+        if (isBiometricLockEnabled.value) {
+            _isAppLocked.value = true
+        }
+    }
+
+    fun unlockApp() {
+        _isAppLocked.value = false
+    }
+
     fun openAddDialog() {
         _editingEntry.value = null
         _isAddEditOpen.value = true
@@ -260,8 +289,20 @@ class BodyMetricsViewModel(application: Application) : AndroidViewModel(applicat
     fun deleteEntry(entry: BodyMetricEntry) {
         viewModelScope.launch {
             repository.delete(entry)
-            _userMessage.value = "Замер удален"
+            _pendingUndoEntry.value = entry
         }
+    }
+
+    fun restoreEntry(entry: BodyMetricEntry) {
+        viewModelScope.launch {
+            repository.insert(entry)
+            _userMessage.value = "Замер восстановлен"
+            _pendingUndoEntry.value = null
+        }
+    }
+
+    fun clearPendingUndo() {
+        _pendingUndoEntry.value = null
     }
 
     fun generateDemoData() {
@@ -287,14 +328,21 @@ class BodyMetricsViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     /**
-     * Prepares a file in cache and returns a FileProvider Uri for Google Drive or cloud apps.
+     * Prepares a file in cacheDir/exports and returns a FileProvider Uri for Google Drive or cloud apps.
+     * Cleans up previously created export files immediately.
      */
     fun createBackupFileForShare(): Pair<Uri, String>? {
         val context = getApplication<Application>()
         return try {
+            val exportsDir = File(context.cacheDir, "exports").apply {
+                if (!exists()) mkdirs()
+            }
+            // Delete previous temporary exports
+            exportsDir.listFiles()?.forEach { it.delete() }
+
             val fileDate = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
             val fileName = "bodymetrics_backup_$fileDate.csv"
-            val cacheFile = File(context.cacheDir, fileName)
+            val cacheFile = File(exportsDir, fileName)
             val csvContent = exportToCsv()
             val contentWithBom = if (!csvContent.startsWith("\uFEFF")) "\uFEFF$csvContent" else csvContent
             cacheFile.writeText(contentWithBom, Charsets.UTF_8)
@@ -308,12 +356,28 @@ class BodyMetricsViewModel(application: Application) : AndroidViewModel(applicat
     fun importCsv(csvContent: String) {
         viewModelScope.launch {
             try {
-                val parsed = repository.parseCsv(csvContent)
-                if (parsed.isEmpty()) {
+                val lastHeight = allEntriesDescending.value.firstOrNull()?.heightCm
+                val parseResult = repository.parseCsvDetailed(
+                    csvText = csvContent,
+                    lastKnownHeight = lastHeight,
+                    existingEntries = allEntriesDescending.value
+                )
+                if (parseResult.entries.isEmpty() && parseResult.duplicatesCount == 0 && parseResult.skippedInvalidCount == 0) {
                     _userMessage.value = "Ошибка: не удалось распознать строки CSV"
                 } else {
-                    repository.insertAll(parsed)
-                    _userMessage.value = "Успешно импортировано ${parsed.size} записей"
+                    if (parseResult.entries.isNotEmpty()) {
+                        repository.insertAll(parseResult.entries)
+                    }
+                    val msg = buildString {
+                        append("Импорт CSV: добавлено ${parseResult.entries.size}")
+                        if (parseResult.duplicatesCount > 0) {
+                            append(", дубликатов: ${parseResult.duplicatesCount}")
+                        }
+                        if (parseResult.skippedInvalidCount > 0) {
+                            append(", пропущено некорректных: ${parseResult.skippedInvalidCount}")
+                        }
+                    }
+                    _userMessage.value = msg
                 }
             } catch (e: Exception) {
                 _userMessage.value = "Ошибка при импорте: ${e.localizedMessage ?: "неверный формат"}"
@@ -346,7 +410,13 @@ class BodyMetricsViewModel(application: Application) : AndroidViewModel(applicat
                 settings.targetWeightKg?.let { settingsRepository.setTargetWeight(it) }
                 settings.weeklyReminderEnabled?.let { setWeeklyReminder(it) }
             }
-            _userMessage.value = "Импорт завершён: добавлено ${summary.entriesToAdd.size}, дубликатов: ${summary.duplicatesCount}"
+            val msg = buildString {
+                append("Импорт завершён: добавлено ${summary.entriesToAdd.size}, дубликатов: ${summary.duplicatesCount}")
+                if (summary.skippedInvalidCount > 0) {
+                    append(", пропущено некорректных: ${summary.skippedInvalidCount}")
+                }
+            }
+            _userMessage.value = msg
         }
     }
 
@@ -397,7 +467,13 @@ class BodyMetricsViewModel(application: Application) : AndroidViewModel(applicat
                     repository.update(latest.copy(heightCm = result.profileHeightCm))
                 }
             }
-            _userMessage.value = "Импорт из Mi Fitness завершён: +${result.newRecords.size} записей, дубликатов: ${result.duplicatesCount}"
+            val msg = buildString {
+                append("Импорт из Mi Fitness завершён: +${result.newRecords.size} записей, дубликатов: ${result.duplicatesCount}")
+                if (result.skippedInvalidCount > 0) {
+                    append(", пропущено некорректных: ${result.skippedInvalidCount}")
+                }
+            }
+            _userMessage.value = msg
             clearMiFitnessState()
         }
     }

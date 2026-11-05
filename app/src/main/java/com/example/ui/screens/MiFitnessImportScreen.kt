@@ -461,6 +461,12 @@ fun MiFitnessImportScreen(
                         isHighlight = true
                     )
                     SummaryRow(label = "Пропущено (дубликаты):", value = "${parseResult.duplicatesCount}")
+                    if (parseResult.skippedInvalidCount > 0) {
+                        SummaryRow(
+                            label = "Пропущено некорректных:",
+                            value = "${parseResult.skippedInvalidCount}"
+                        )
+                    }
 
                     if (parseResult.profileHeightCm != null) {
                         Spacer(modifier = Modifier.height(8.dp))

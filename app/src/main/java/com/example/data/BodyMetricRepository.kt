@@ -116,16 +116,42 @@ class BodyMetricRepository(private val dao: BodyMetricDao) {
         return sb.toString()
     }
 
+    data class CsvParseResult(
+        val entries: List<BodyMetricEntry>,
+        val skippedInvalidCount: Int,
+        val duplicatesCount: Int
+    )
+
     /**
      * Parses a CSV string and returns parsed BodyMetricEntry list.
      * Gracefully strips UTF-8 BOM (\uFEFF) if present, and auto-detects delimiter (, or ;).
      */
-    fun parseCsv(csvText: String): List<BodyMetricEntry> {
+    fun parseCsv(
+        csvText: String,
+        lastKnownHeight: Float? = null,
+        existingEntries: List<BodyMetricEntry> = emptyList()
+    ): List<BodyMetricEntry> {
+        return parseCsvDetailed(csvText, lastKnownHeight, existingEntries).entries
+    }
+
+    /**
+     * Parses CSV with strict validation and deduplication:
+     * - Weight: 20–500 kg, height: 50–300 cm, circumferences: 10–250 cm via MetricValidationUtil.
+     * - NaN, 0, negative or out-of-range rows are skipped (incrementing skippedInvalidCount).
+     * - If date is unparseable, row is skipped (no fallback to Date()).
+     * - If height is omitted, uses lastKnownHeight ?: 175f.
+     * - Deduplicates against existing DB entries and within the file by exact timestamp (to the second).
+     */
+    fun parseCsvDetailed(
+        csvText: String,
+        lastKnownHeight: Float? = null,
+        existingEntries: List<BodyMetricEntry> = emptyList()
+    ): CsvParseResult {
         val cleanText = csvText.removePrefix(UTF8_BOM).removePrefix("\uFEFF").trim()
         val lines = cleanText.lines()
             .map { it.trim().removePrefix(UTF8_BOM).removePrefix("\uFEFF") }
             .filter { it.isNotBlank() }
-        if (lines.size <= 1) return emptyList()
+        if (lines.size <= 1) return CsvParseResult(emptyList(), 0, 0)
 
         val headerLine = lines.first()
         val detectedDelimiter = if (headerLine.count { it == ';' } > headerLine.count { it == ',' }) ';' else ','
@@ -134,58 +160,139 @@ class BodyMetricRepository(private val dao: BodyMetricDao) {
         val altDateFormat = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
         val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
 
+        val existingTimestampsSec = existingEntries.map { it.dateMillis / 1000L }.toMutableSet()
+        val seenInFileTimestampsSec = mutableSetOf<Long>()
+
         val result = mutableListOf<BodyMetricEntry>()
+        var skippedInvalid = 0
+        var duplicates = 0
+
+        val fallbackHeight = lastKnownHeight ?: 175f
+
         // Skip header
         for (i in 1 until lines.size) {
             val line = lines[i]
             val tokens = parseCsvLine(line, detectedDelimiter)
-            if (tokens.size >= 4) {
-                try {
-                    val dateStr = tokens.getOrNull(1)?.trim() ?: ""
-                    val timeStr = tokens.getOrNull(2)?.trim() ?: ""
-                    val parsedDate = try {
-                        dateFormat.parse(dateStr)
-                    } catch (e: Exception) {
-                        try {
-                            altDateFormat.parse(dateStr)
-                        } catch (e2: Exception) {
-                            Date()
-                        }
-                    } ?: Date()
+            if (tokens.size < 4) {
+                skippedInvalid++
+                continue
+            }
 
-                    val dateMillis = parsedDate.time
-                    val weight = tokens.getOrNull(3)?.replace(",", ".")?.toFloatOrNull() ?: continue
-                    val height = tokens.getOrNull(4)?.replace(",", ".")?.toFloatOrNull() ?: 175f
+            try {
+                val dateStr = tokens.getOrNull(1)?.trim() ?: ""
+                val timeStr = tokens.getOrNull(2)?.trim() ?: ""
 
-                    val chest = tokens.getOrNull(6)?.replace(",", ".")?.toFloatOrNull()
-                    val waist = tokens.getOrNull(7)?.replace(",", ".")?.toFloatOrNull()
-                    val hips = tokens.getOrNull(8)?.replace(",", ".")?.toFloatOrNull()
-                    val biceps = tokens.getOrNull(9)?.replace(",", ".")?.toFloatOrNull()
-                    val thigh = tokens.getOrNull(10)?.replace(",", ".")?.toFloatOrNull()
-                    val neck = tokens.getOrNull(11)?.replace(",", ".")?.toFloatOrNull()
-                    val notes = tokens.getOrNull(12)?.trim() ?: ""
-
-                    result.add(
-                        BodyMetricEntry(
-                            id = 0L,
-                            dateMillis = dateMillis,
-                            weightKg = weight,
-                            heightCm = height,
-                            chestCm = chest,
-                            waistCm = waist,
-                            hipsCm = hips,
-                            bicepsCm = biceps,
-                            thighCm = thigh,
-                            neckCm = neck,
-                            notes = notes
-                        )
-                    )
-                } catch (_: Exception) {
-                    // Skip invalid line
+                if (dateStr.isBlank()) {
+                    skippedInvalid++
+                    continue
                 }
+
+                // Parse date strictly without falling back to Date()
+                val parsedDate: Date? = try {
+                    dateFormat.parse(dateStr)
+                } catch (_: Exception) {
+                    try {
+                        altDateFormat.parse(dateStr)
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+
+                if (parsedDate == null) {
+                    skippedInvalid++
+                    continue
+                }
+
+                val cal = java.util.Calendar.getInstance().apply {
+                    time = parsedDate
+                    if (timeStr.isNotBlank()) {
+                        try {
+                            val parsedTime = timeFormat.parse(timeStr)
+                            if (parsedTime != null) {
+                                val tCal = java.util.Calendar.getInstance().apply { time = parsedTime }
+                                set(java.util.Calendar.HOUR_OF_DAY, tCal.get(java.util.Calendar.HOUR_OF_DAY))
+                                set(java.util.Calendar.MINUTE, tCal.get(java.util.Calendar.MINUTE))
+                                set(java.util.Calendar.SECOND, 0)
+                                set(java.util.Calendar.MILLISECOND, 0)
+                            }
+                        } catch (_: Exception) {
+                            // keep 00:00:00
+                        }
+                    }
+                }
+                val dateMillis = cal.timeInMillis
+                val timestampSec = dateMillis / 1000L
+
+                val rawWeight = tokens.getOrNull(3)?.replace(",", ".")?.toFloatOrNull()
+                if (!com.example.util.MetricValidationUtil.isWeightValid(rawWeight)) {
+                    skippedInvalid++
+                    continue
+                }
+                val weight = rawWeight!!
+
+                val rawHeight = tokens.getOrNull(4)?.replace(",", ".")?.toFloatOrNull()
+                val height = if (rawHeight != null && rawHeight > 0f) {
+                    if (!com.example.util.MetricValidationUtil.isHeightValid(rawHeight)) {
+                        skippedInvalid++
+                        continue
+                    }
+                    rawHeight
+                } else {
+                    fallbackHeight
+                }
+
+                val chest = tokens.getOrNull(6)?.replace(",", ".")?.toFloatOrNull()
+                val waist = tokens.getOrNull(7)?.replace(",", ".")?.toFloatOrNull()
+                val hips = tokens.getOrNull(8)?.replace(",", ".")?.toFloatOrNull()
+                val biceps = tokens.getOrNull(9)?.replace(",", ".")?.toFloatOrNull()
+                val thigh = tokens.getOrNull(10)?.replace(",", ".")?.toFloatOrNull()
+                val neck = tokens.getOrNull(11)?.replace(",", ".")?.toFloatOrNull()
+
+                // Validate measurements
+                if (!com.example.util.MetricValidationUtil.isMeasurementValid(chest) ||
+                    !com.example.util.MetricValidationUtil.isMeasurementValid(waist) ||
+                    !com.example.util.MetricValidationUtil.isMeasurementValid(hips) ||
+                    !com.example.util.MetricValidationUtil.isMeasurementValid(biceps) ||
+                    !com.example.util.MetricValidationUtil.isMeasurementValid(thigh) ||
+                    !com.example.util.MetricValidationUtil.isMeasurementValid(neck)
+                ) {
+                    skippedInvalid++
+                    continue
+                }
+
+                val notes = tokens.getOrNull(12)?.trim() ?: ""
+
+                // Deduplication by exact second match
+                if (existingTimestampsSec.contains(timestampSec) || seenInFileTimestampsSec.contains(timestampSec)) {
+                    duplicates++
+                    continue
+                }
+
+                seenInFileTimestampsSec.add(timestampSec)
+                result.add(
+                    BodyMetricEntry(
+                        id = 0L,
+                        dateMillis = dateMillis,
+                        weightKg = weight,
+                        heightCm = height,
+                        chestCm = chest,
+                        waistCm = waist,
+                        hipsCm = hips,
+                        bicepsCm = biceps,
+                        thighCm = thigh,
+                        neckCm = neck,
+                        notes = notes
+                    )
+                )
+            } catch (_: Exception) {
+                skippedInvalid++
             }
         }
-        return result
+        return CsvParseResult(
+            entries = result,
+            skippedInvalidCount = skippedInvalid,
+            duplicatesCount = duplicates
+        )
     }
 
     private fun parseCsvLine(line: String, defaultDelimiter: Char = ','): List<String> {

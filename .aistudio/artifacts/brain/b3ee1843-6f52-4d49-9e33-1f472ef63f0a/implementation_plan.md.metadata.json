@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan for JSON Backup & Restore and Streaming Mi Fitness Archive Import with instruction screen and confirmation summary.",
-  "updatedAt": "2026-11-05T13:36:53.095076171Z",
+  "summary": "Comprehensive implementation plan covering strict metric validation for all imports, time-based deduplication, Mi Fitness exact key parsing, Room schema export and migration safety, deletion undo with 6-second Snackbar, offline security (FLAG_SECURE, biometric lock, Firebase removal, export cleanup, backup rules), 7-day rolling weight pace, and default height initialization.",
+  "updatedAt": "2026-11-05T14:51:09.592981728Z",
   "requestFeedback": true,
   "userFacing": true
 }

@@ -748,9 +748,9 @@ fun GoalPaceAnalyticsSection(
                 modifier = Modifier.weight(1f)
             )
 
-            // Zone 2: Темп за 30 дней
+            // Zone 2: Скользящий темп
             AnalyticsZoneCard(
-                title = "Темп за 30 дн.",
+                title = "Темп (в неделю)",
                 value = prediction.paceText,
                 subtitle = prediction.paceDescription,
                 indicatorText = prediction.paceTrendComparison,

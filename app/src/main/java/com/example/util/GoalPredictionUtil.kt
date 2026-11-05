@@ -77,10 +77,19 @@ object GoalPredictionUtil {
         // Filter entries for the last 30 days relative to newest recorded date
         val sorted = allEntries.sortedBy { it.dateMillis }
         val newestEntry = sorted.lastOrNull()
-        val windowCutoff = if (newestEntry != null) newestEntry.dateMillis - THIRTY_DAYS_MILLIS else 0L
-        val windowPrevCutoff = if (newestEntry != null) newestEntry.dateMillis - (2 * THIRTY_DAYS_MILLIS) else 0L
+        val sevenDaysMillis = 7L * 86_400_000L
+        val windowCutoff = if (newestEntry != null) newestEntry.dateMillis - sevenDaysMillis else 0L
+        val windowPrevCutoff = if (newestEntry != null) newestEntry.dateMillis - (2 * sevenDaysMillis) else 0L
 
-        val recentEntries = sorted.filter { it.dateMillis >= windowCutoff }
+        // Current 7-day rolling window (or fallback to all available points if less than 7 days exist)
+        val candidateRecent = sorted.filter { it.dateMillis >= windowCutoff }
+        val recentEntries = if (candidateRecent.size >= 2) {
+            candidateRecent
+        } else {
+            // As agreed in clarifying answers: calculate across all available entries if < 7 days
+            sorted
+        }
+
         val prevCandidates = sorted.filter { it.dateMillis in windowPrevCutoff until windowCutoff }
         val prevEntries = if (prevCandidates.size >= 2) {
             prevCandidates
@@ -90,26 +99,26 @@ object GoalPredictionUtil {
             prevCandidates
         }
 
-        // Calculate average weekly pace across the 30-day window
+        // Calculate average weekly pace across the 7-day rolling window
         val weeklyPace: Double? = if (recentEntries.size >= 2) {
             val oldest = recentEntries.first()
             val newest = recentEntries.last()
             val days = (newest.dateMillis - oldest.dateMillis) / (86_400_000.0)
             val deltaKg = (newest.weightKg - oldest.weightKg).toDouble()
             val weeks = days / 7.0
-            if (weeks >= 0.5) deltaKg / weeks
+            if (weeks >= 0.1) deltaKg / weeks
             else if (days >= 1.0) (deltaKg / days) * 7.0
             else deltaKg
         } else null
 
-        // Calculate average weekly pace across the previous 30-day window [newest - 60d, newest - 30d]
+        // Calculate average weekly pace across the previous 7-day window
         val prevWeeklyPace: Double? = if (prevEntries.size >= 2) {
             val oldest = prevEntries.first()
             val newest = prevEntries.last()
             val days = (newest.dateMillis - oldest.dateMillis) / (86_400_000.0)
             val deltaKg = (newest.weightKg - oldest.weightKg).toDouble()
             val weeks = days / 7.0
-            if (weeks >= 0.5) deltaKg / weeks
+            if (weeks >= 0.1) deltaKg / weeks
             else if (days >= 1.0) (deltaKg / days) * 7.0
             else deltaKg
         } else null
@@ -160,17 +169,17 @@ object GoalPredictionUtil {
         }
 
         val paceDesc = when {
-            weeklyPace == null -> if (allEntries.size < 2) "Мало замеров" else "Мало данных за 30 дн."
-            abs(weeklyPace) < 0.05 -> "Стабильно за 30 дн."
-            weeklyPace > 0 -> "Набор за 30 дн."
-            else -> "Снижение за 30 дн."
+            weeklyPace == null -> if (allEntries.size < 2) "Мало замеров" else "Мало данных за 7 дн."
+            abs(weeklyPace) < 0.05 -> "Стабильно за 7 дн."
+            weeklyPace > 0 -> "Набор за 7 дн."
+            else -> "Снижение за 7 дн."
         }
 
         val trendSummarySuffix = if (paceTrendComparison != null && paceTrendDelta != null) {
             when (paceTrendComparison) {
-                "▲ Ускорение" -> " (Темп ускорился на ${String.format(Locale.US, "%.1f", abs(paceTrendDelta))} кг/нед к прошл. 30 дн.)"
-                "▼ Замедление" -> " (Темп замедлился на ${String.format(Locale.US, "%.1f", abs(paceTrendDelta))} кг/нед к прошл. 30 дн.)"
-                else -> " (Темп стабилен относительно прошлых 30 дн.)"
+                "▲ Ускорение" -> " (Темп ускорился на ${String.format(Locale.US, "%.1f", abs(paceTrendDelta))} кг/нед)"
+                "▼ Замедление" -> " (Темп замедлился на ${String.format(Locale.US, "%.1f", abs(paceTrendDelta))} кг/нед)"
+                else -> " (Темп стабилен)"
             }
         } else ""
 
@@ -190,9 +199,9 @@ object GoalPredictionUtil {
                 isAchieved = false,
                 isMovingTowardsGoal = false,
                 explanationText = if (allEntries.size < 2) {
-                    "Сделайте замеры за разные дни, чтобы приложение рассчитало темп за последние 30 дней и дату достижения цели."
+                    "Сделайте замеры за разные дни, чтобы приложение рассчитало темп и дату достижения цели."
                 } else {
-                    "За последние 30 дней недостаточно замеров для вычисления темпа. Добавьте новый замер, чтобы увидеть прогресс за месяц.$trendSummarySuffix"
+                    "За последнее время недостаточно замеров для вычисления темпа. Добавьте новый замер, чтобы увидеть прогресс.$trendSummarySuffix"
                 }
             )
         }
@@ -218,9 +227,9 @@ object GoalPredictionUtil {
                 isAchieved = false,
                 isMovingTowardsGoal = false,
                 explanationText = (if (diff > 0)
-                    "Для цели нужно снижение веса, но за последние 30 дней зафиксирован набор (+${String.format(Locale.US, "%.1f", weeklyPace)} кг/нед)."
+                    "Для цели нужно снижение веса, но зафиксирован набор (+${String.format(Locale.US, "%.1f", weeklyPace)} кг/нед)."
                 else
-                    "Для цели нужен набор веса, но за последние 30 дней зафиксировано снижение (${String.format(Locale.US, "%.1f", weeklyPace)} кг/нед).") + trendSummarySuffix
+                    "Для цели нужен набор веса, но зафиксировано снижение (${String.format(Locale.US, "%.1f", weeklyPace)} кг/нед).") + trendSummarySuffix
             )
         }
 
@@ -248,7 +257,7 @@ object GoalPredictionUtil {
             paceDescription = paceDesc,
             isAchieved = false,
             isMovingTowardsGoal = true,
-            explanationText = "При текущем среднем темпе за 30 дней ($paceText) прогнозируемая дата достижения цели: $formattedDate.$trendSummarySuffix"
+            explanationText = "При текущем темпе ($paceText) прогнозируемая дата достижения цели: $formattedDate.$trendSummarySuffix"
         )
     }
 }
